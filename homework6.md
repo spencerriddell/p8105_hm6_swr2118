@@ -1,28 +1,20 @@
----
-title: "Homework 6: Homicides, Bootstrap Regression, and Birthweight Modeling"
-author: "Spencer Riddell"
-output:
-  github_document:
-    toc: true
-    toc_depth: 3
----
+Homework 6: Homicides, Bootstrap Regression, and Birthweight Modeling
+================
+Spencer Riddell
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
-library(tidyverse)
-library(janitor)
-library(broom)
-library(purrr)
-library(glue)
-library(scales)
-library(patchwork)
-library(modelr)
-library(rsample)
-```
+- [Problem 1: Homicides in U.S.
+  Cities](#problem-1-homicides-in-us-cities)
+  - [Comments on the plot](#comments-on-the-plot)
+- [Problem 2: Bootstrap for Linear Regression
+  Metrics](#problem-2-bootstrap-for-linear-regression-metrics)
+  - [Description of distributions and 95%
+    intervals](#description-of-distributions-and-95-intervals)
+- [Problem 3: Birthweight Modeling](#problem-3-birthweight-modeling)
+  - [Modeling](#modeling)
 
 # Problem 1: Homicides in U.S. Cities
 
-```{r problem1-load}
+``` r
 homicides_url <- "https://raw.githubusercontent.com/washingtonpost/data-homicides/master/homicide-data.csv"
 
 homicides_raw <- read_csv(homicides_url, show_col_types = FALSE) |> 
@@ -31,7 +23,22 @@ homicides_raw <- read_csv(homicides_url, show_col_types = FALSE) |>
 glimpse(homicides_raw)
 ```
 
-```{r problem1-clean}
+    ## Rows: 52,179
+    ## Columns: 12
+    ## $ uid           <chr> "Alb-000001", "Alb-000002", "Alb-000003", "Alb-000004", …
+    ## $ reported_date <dbl> 20100504, 20100216, 20100601, 20100101, 20100102, 201001…
+    ## $ victim_last   <chr> "GARCIA", "MONTOYA", "SATTERFIELD", "MENDIOLA", "MULA", …
+    ## $ victim_first  <chr> "JUAN", "CAMERON", "VIVIANA", "CARLOS", "VIVIAN", "GERAL…
+    ## $ victim_race   <chr> "Hispanic", "Hispanic", "White", "Hispanic", "White", "W…
+    ## $ victim_age    <chr> "78", "17", "15", "32", "72", "91", "52", "52", "56", "4…
+    ## $ victim_sex    <chr> "Male", "Male", "Female", "Male", "Female", "Female", "M…
+    ## $ city          <chr> "Albuquerque", "Albuquerque", "Albuquerque", "Albuquerqu…
+    ## $ state         <chr> "NM", "NM", "NM", "NM", "NM", "NM", "NM", "NM", "NM", "N…
+    ## $ lat           <dbl> 35.09579, 35.05681, 35.08609, 35.07849, 35.13036, 35.151…
+    ## $ lon           <dbl> -106.5386, -106.7153, -106.6956, -106.5561, -106.5810, -…
+    ## $ disposition   <chr> "Closed without arrest", "Closed by arrest", "Closed wit…
+
+``` r
 # Create city_state; solved binary; filter cities and races; ensure victim_age numeric
 homicides <- homicides_raw |>
   mutate(
@@ -72,7 +79,12 @@ homicides_missing_summary <- homicides |>
 homicides_missing_summary
 ```
 
-```{r problem1-baltimore-glm}
+    ## # A tibble: 1 × 5
+    ##       n missing_age missing_sex missing_race missing_solved
+    ##   <int>       <int>       <int>        <int>          <int>
+    ## 1 39693         290          41            0              0
+
+``` r
 # Baltimore model: logistic regression with victim_age, victim_sex, victim_race
 baltimore_df <- homicides |> filter(city_state == "Baltimore, MD")
 
@@ -101,7 +113,13 @@ baltimore_or <- baltimore_tidy |>
 baltimore_or
 ```
 
-```{r problem1-all-cities}
+    ## # A tibble: 1 × 8
+    ##   city_state    term  estimate_logit conf_low_logit conf_high_logit    OR OR_low
+    ##   <chr>         <chr>          <dbl>          <dbl>           <dbl> <dbl>  <dbl>
+    ## 1 Baltimore, MD vict…         -0.854          -1.13          -0.584 0.426  0.324
+    ## # ℹ 1 more variable: OR_high <dbl>
+
+``` r
 # Fit model for each city; extract OR for male vs female
 city_models <- homicides |>
   group_by(city_state) |>
@@ -143,7 +161,19 @@ list(
 )
 ```
 
-```{r problem1-plot, fig.height=8}
+    ## $n_cities_total
+    ## [1] 47
+    ## 
+    ## $n_cities_with_or
+    ## [1] 47
+    ## 
+    ## $n_cities_missing_or
+    ## [1] 0
+    ## 
+    ## $missing_or_cities
+    ## character(0)
+
+``` r
 # Plot ORs and CIs per city ordered by OR
 city_or_plot <- city_or |>
   arrange(OR) |>
@@ -164,24 +194,45 @@ city_or_plot <- city_or |>
 city_or_plot
 ```
 
+![](homework6_files/figure-gfm/problem1-plot-1.png)<!-- -->
+
 ### Comments on the plot
 
-- The dashed line at OR = 1 indicates no difference in resolution odds between male and female victims after adjusting for age and race.
-- Cities to the right of the line (OR > 1) suggest higher odds of resolution for male victims relative to female victims; those to the left (OR < 1) suggest lower odds.
-- The width of the error bars reflects uncertainty; wide intervals may indicate limited data or variability.
-- Across the majority of cities, point estimates cluster close to 1 and confidence intervals frequently cross 1, implying that—after adjusting for victim age and race—sex is not a strong, consistent predictor of case resolution. This pattern suggests operational or investigative factors driving resolution are largely similar across male and female victims in most jurisdictions.
-- Significant cities all fall below OR = 1, indicating lower odds of resolution for male victims compared to female victims.
+- The dashed line at OR = 1 indicates no difference in resolution odds
+  between male and female victims after adjusting for age and race.
+- Cities to the right of the line (OR \> 1) suggest higher odds of
+  resolution for male victims relative to female victims; those to the
+  left (OR \< 1) suggest lower odds.
+- The width of the error bars reflects uncertainty; wide intervals may
+  indicate limited data or variability.
+- Across the majority of cities, point estimates cluster close to 1 and
+  confidence intervals frequently cross 1, implying that—after adjusting
+  for victim age and race—sex is not a strong, consistent predictor of
+  case resolution. This pattern suggests operational or investigative
+  factors driving resolution are largely similar across male and female
+  victims in most jurisdictions.
+- Significant cities all fall below OR = 1, indicating lower odds of
+  resolution for male victims compared to female victims.
 
 # Problem 2: Bootstrap for Linear Regression Metrics
 
-```{r problem2-load}
+``` r
 library(p8105.datasets)
 data("weather_df")
 
 glimpse(weather_df)
 ```
 
-```{r problem2-bootstrap}
+    ## Rows: 2,190
+    ## Columns: 6
+    ## $ name <chr> "CentralPark_NY", "CentralPark_NY", "CentralPark_NY", "CentralPar…
+    ## $ id   <chr> "USW00094728", "USW00094728", "USW00094728", "USW00094728", "USW0…
+    ## $ date <date> 2021-01-01, 2021-01-02, 2021-01-03, 2021-01-04, 2021-01-05, 2021…
+    ## $ prcp <dbl> 157, 13, 56, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 97, 198, 0, 0, 0, 5…
+    ## $ tmax <dbl> 4.4, 10.6, 3.3, 6.1, 5.6, 5.0, 5.0, 2.8, 2.8, 5.0, 2.8, 6.7, 6.1,…
+    ## $ tmin <dbl> 0.6, 2.2, 1.1, 1.7, 2.2, 1.1, -1.0, -2.7, -4.3, -1.6, -2.1, 0.6, …
+
+``` r
 set.seed(123)
 
 # Helper: fit model and extract R^2 and product of coefficients
@@ -219,7 +270,13 @@ boot_summary <- boot_results |>
 boot_summary
 ```
 
-```{r problem2-plots, fig.height=6}
+    ## # A tibble: 1 × 8
+    ##   r2_mean   r2_sd r2_q025 r2_q975 beta_prod_mean beta_prod_sd beta_prod_q025
+    ##     <dbl>   <dbl>   <dbl>   <dbl>          <dbl>        <dbl>          <dbl>
+    ## 1   0.941 0.00315   0.934   0.947       -0.00582      0.00117       -0.00823
+    ## # ℹ 1 more variable: beta_prod_q975 <dbl>
+
+``` r
 p_r2 <- boot_results |>
   ggplot(aes(x = r2)) +
   geom_histogram(bins = 40, fill = "steelblue", color = "white") +
@@ -247,14 +304,23 @@ p_beta_prod <- boot_results |>
 p_r2 + p_beta_prod
 ```
 
+![](homework6_files/figure-gfm/problem2-plots-1.png)<!-- -->
+
 ### Description of distributions and 95% intervals
 
-- The bootstrap R-squared is tightly concentrated around ~0.94 with a narrow 95% interval (≈0.935–0.946), indicating the model with tmin and prcp explains a large and consistently stable fraction of tmax variability.
-- The distribution of β̂1 × β̂2 centers near a small negative value with a symmetric spread (95% interval roughly −0.008 to −0.004), suggesting tmin’s positive effect and prcp’s negative effect yield a modestly negative product, and this combined magnitude is estimated with reasonable precision.
+- The bootstrap R-squared is tightly concentrated around ~0.94 with a
+  narrow 95% interval (≈0.935–0.946), indicating the model with tmin and
+  prcp explains a large and consistently stable fraction of tmax
+  variability.
+- The distribution of β̂1 × β̂2 centers near a small negative value with a
+  symmetric spread (95% interval roughly −0.008 to −0.004), suggesting
+  tmin’s positive effect and prcp’s negative effect yield a modestly
+  negative product, and this combined magnitude is estimated with
+  reasonable precision.
 
 # Problem 3: Birthweight Modeling
 
-```{r problem3-load}
+``` r
 birthweight_url <- "https://p8105.com/data/birthweight.csv"
 
 bw_raw <- read_csv(birthweight_url, show_col_types = FALSE) |> 
@@ -263,7 +329,30 @@ bw_raw <- read_csv(birthweight_url, show_col_types = FALSE) |>
 glimpse(bw_raw)
 ```
 
-```{r problem3-clean}
+    ## Rows: 4,342
+    ## Columns: 20
+    ## $ babysex  <dbl> 2, 1, 2, 1, 2, 1, 2, 2, 1, 1, 2, 1, 2, 1, 1, 2, 1, 2, 2, 2, 1…
+    ## $ bhead    <dbl> 34, 34, 36, 34, 34, 33, 33, 33, 36, 33, 35, 35, 35, 36, 35, 3…
+    ## $ blength  <dbl> 51, 48, 50, 52, 52, 52, 46, 49, 52, 50, 51, 51, 48, 53, 51, 4…
+    ## $ bwt      <dbl> 3629, 3062, 3345, 3062, 3374, 3374, 2523, 2778, 3515, 3459, 3…
+    ## $ delwt    <dbl> 177, 156, 148, 157, 156, 129, 126, 140, 146, 169, 130, 146, 1…
+    ## $ fincome  <dbl> 35, 65, 85, 55, 5, 55, 96, 5, 85, 75, 55, 55, 75, 75, 65, 75,…
+    ## $ frace    <dbl> 1, 2, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 2, 1…
+    ## $ gaweeks  <dbl> 39.9, 25.9, 39.9, 40.0, 41.6, 40.7, 40.3, 37.4, 40.3, 40.7, 4…
+    ## $ malform  <dbl> 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0…
+    ## $ menarche <dbl> 13, 14, 12, 14, 13, 12, 14, 12, 11, 12, 13, 12, 13, 11, 12, 1…
+    ## $ mheight  <dbl> 63, 65, 64, 64, 66, 66, 72, 62, 61, 64, 67, 62, 64, 68, 62, 6…
+    ## $ momage   <dbl> 36, 25, 29, 18, 20, 23, 29, 19, 13, 19, 23, 16, 28, 23, 21, 1…
+    ## $ mrace    <dbl> 1, 2, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 2, 1…
+    ## $ parity   <dbl> 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0…
+    ## $ pnumlbw  <dbl> 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0…
+    ## $ pnumsga  <dbl> 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0…
+    ## $ ppbmi    <dbl> 26.27184, 21.34485, 23.56517, 21.84508, 21.02642, 18.60030, 1…
+    ## $ ppwt     <dbl> 148, 128, 137, 127, 130, 115, 105, 119, 105, 145, 110, 115, 1…
+    ## $ smoken   <dbl> 0.000, 0.000, 1.000, 10.000, 1.000, 0.000, 0.000, 0.000, 0.00…
+    ## $ wtgain   <dbl> 29, 28, 11, 30, 26, 14, 21, 21, 41, 24, 20, 31, 23, 21, 24, 2…
+
+``` r
 # Convert appropriate variables to factors; check missingness
 bw <- bw_raw |>
   mutate(
@@ -283,7 +372,26 @@ bw_missing_summary <- bw |>
 bw_missing_summary |> head(15)
 ```
 
-```{r problem3-model-proposal}
+    ## # A tibble: 15 × 2
+    ##    variable n_missing
+    ##    <chr>        <int>
+    ##  1 babysex          0
+    ##  2 bhead            0
+    ##  3 blength          0
+    ##  4 bwt              0
+    ##  5 delwt            0
+    ##  6 fincome          0
+    ##  7 frace            0
+    ##  8 gaweeks          0
+    ##  9 malform          0
+    ## 10 menarche         0
+    ## 11 mheight          0
+    ## 12 momage           0
+    ## 13 mrace            0
+    ## 14 parity           0
+    ## 15 pnumlbw          0
+
+``` r
 # Exploratory correlations for numeric predictors
 numeric_vars <- bw |> select(where(is.numeric))
 cor_mat <- cor(numeric_vars, use = "pairwise.complete.obs")
@@ -303,7 +411,38 @@ model_main <- lm(
 summary(model_main)
 ```
 
-```{r problem3-compare-models}
+    ## 
+    ## Call:
+    ## lm(formula = bwt ~ bhead + blength + gaweeks + babysex + ppbmi + 
+    ##     wtgain + smoken + mrace + parity + momage, data = bw)
+    ## 
+    ## Residuals:
+    ##      Min       1Q   Median       3Q      Max 
+    ## -1077.17  -186.30    -4.32   177.67  2398.08 
+    ## 
+    ## Coefficients:
+    ##                    Estimate Std. Error t value Pr(>|t|)    
+    ## (Intercept)      -5782.2643   102.7580 -56.271  < 2e-16 ***
+    ## bhead              131.9708     3.4655  38.081  < 2e-16 ***
+    ## blength             76.5364     2.0187  37.914  < 2e-16 ***
+    ## gaweeks             11.3419     1.4735   7.697 1.71e-14 ***
+    ## babysexFemale       31.4428     8.5072   3.696 0.000222 ***
+    ## ppbmi                6.8647     1.3439   5.108 3.40e-07 ***
+    ## wtgain               4.1303     0.3965  10.418  < 2e-16 ***
+    ## smoken              -4.6182     0.5883  -7.850 5.22e-15 ***
+    ## mraceBlack        -142.8886     9.8033 -14.575  < 2e-16 ***
+    ## mraceAsian        -103.8852    42.7699  -2.429 0.015184 *  
+    ## mracePuertoRican  -134.8342    18.8633  -7.148 1.03e-12 ***
+    ## parity              87.1489    40.6902   2.142 0.032268 *  
+    ## momage               1.8033     1.1728   1.538 0.124212    
+    ## ---
+    ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+    ## 
+    ## Residual standard error: 274.2 on 4329 degrees of freedom
+    ## Multiple R-squared:  0.7142, Adjusted R-squared:  0.7134 
+    ## F-statistic: 901.7 on 12 and 4329 DF,  p-value: < 2.2e-16
+
+``` r
 # Alternative models:
 model_len_ga <- lm(bwt ~ blength + gaweeks, data = bw)
 model_interact <- lm(bwt ~ bhead * blength * babysex, data = bw)
@@ -348,7 +487,13 @@ cv_summary <- cv_results |>
 cv_summary
 ```
 
-```{r problem3-compare-plot, fig.height=5}
+    ## # A tibble: 1 × 6
+    ##   rmse_main_mean rmse_main_sd rmse_len_ga_mean rmse_len_ga_sd rmse_interact_mean
+    ##            <dbl>        <dbl>            <dbl>          <dbl>              <dbl>
+    ## 1           276.         10.1             334.           17.0               290.
+    ## # ℹ 1 more variable: rmse_interact_sd <dbl>
+
+``` r
 cv_long <- cv_results |>
   pivot_longer(cols = starts_with("rmse_"), names_to = "model", values_to = "rmse") |>
   mutate(model = recode(model,
@@ -366,8 +511,17 @@ ggplot(cv_long, aes(x = model, y = rmse)) +
   theme_minimal()
 ```
 
+![](homework6_files/figure-gfm/problem3-compare-plot-1.png)<!-- -->
+
 ### Modeling
 
-- I included key physiological predictors (head circumference, length, gestational age) and maternal risk factors (BMI, weight gain, smoking), plus parity and maternal age.
-- The proposed model yields the lowest and most stable RMSE, indicating superior and more consistent birthweight predictions compared to the other models.
-- The interaction model (Head × Length × Sex) improves over the simple Length + Gestational age baseline, but still underperforms the proposed model, highlighting the added value of maternal and behavioral covariates.
+- I included key physiological predictors (head circumference, length,
+  gestational age) and maternal risk factors (BMI, weight gain,
+  smoking), plus parity and maternal age.
+- The proposed model yields the lowest and most stable RMSE, indicating
+  superior and more consistent birthweight predictions compared to the
+  other models.
+- The interaction model (Head × Length × Sex) improves over the simple
+  Length + Gestational age baseline, but still underperforms the
+  proposed model, highlighting the added value of maternal and
+  behavioral covariates.
