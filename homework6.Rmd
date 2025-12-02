@@ -1,0 +1,418 @@
+---
+title: "Homework 6: Homicides, Bootstrap Regression, and Birthweight Modeling"
+author: "Spencer Riddell"
+output:
+  github_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(janitor)
+library(broom)
+library(purrr)
+library(glue)
+library(scales)
+library(patchwork)
+```
+
+# Problem 1: Homicides in U.S. Cities
+
+```{r problem1-load}
+homicides_url <- "https://raw.githubusercontent.com/washingtonpost/data-homicides/master/homicide-data.csv"
+
+homicides_raw <- read_csv(homicides_url, show_col_types = FALSE) |> 
+  clean_names()
+
+glimpse(homicides_raw)
+```
+
+```{r problem1-clean}
+# Create city_state; solved binary; filter cities and races; ensure victim_age numeric
+homicides <- homicides_raw |>
+  mutate(
+    city_state = glue("{city}, {state}"),
+    # solved: disposition values include "Closed by arrest" vs others
+    solved = case_when(
+      disposition == "Closed by arrest" ~ 1L,
+      TRUE ~ 0L
+    ),
+    solved = factor(solved, levels = c(0,1), labels = c("Unresolved","Resolved")),
+    # normalize race and sex labels
+    victim_race = str_to_lower(victim_race),
+    victim_sex = case_when(
+      victim_sex %in% c("Male", "M") ~ "Male",
+      victim_sex %in% c("Female", "F") ~ "Female",
+      TRUE ~ NA_character_
+    ),
+    victim_sex = factor(victim_sex),
+    victim_race = factor(victim_race),
+    # coerce victim_age numeric (some entries may be "Unknown")
+    victim_age = suppressWarnings(as.numeric(victim_age))
+  ) |>
+  # exclude specified cities
+  filter(!(city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL"))) |>
+  # limit to white/black
+  filter(victim_race %in% c("white", "black"))
+
+# Check missingness summary
+homicides_missing_summary <- homicides |>
+  summarize(
+    n = n(),
+    missing_age = sum(is.na(victim_age)),
+    missing_sex = sum(is.na(victim_sex)),
+    missing_race = sum(is.na(victim_race)),
+    missing_solved = sum(is.na(solved))
+  )
+
+homicides_missing_summary
+```
+
+```{r problem1-baltimore-glm}
+# Baltimore model: logistic regression with victim_age, victim_sex, victim_race
+baltimore_df <- homicides |> filter(city_state == "Baltimore, MD")
+
+baltimore_glm <- glm(
+  solved ~ victim_age + victim_sex + victim_race,
+  data = baltimore_df,
+  family = binomial()
+)
+
+baltimore_tidy <- broom::tidy(baltimore_glm, conf.int = TRUE, conf.level = 0.95, exponentiate = FALSE)
+
+# Extract coefficient for victim_sexMale, convert to OR and CI by exponentiating
+baltimore_or <- baltimore_tidy |>
+  filter(term == "victim_sexMale") |>
+  transmute(
+    city_state = "Baltimore, MD",
+    term,
+    estimate_logit = estimate,
+    conf_low_logit = conf.low,
+    conf_high_logit = conf.high,
+    OR = exp(estimate),
+    OR_low = exp(conf.low),
+    OR_high = exp(conf.high)
+  )
+
+baltimore_or
+```
+
+```{r problem1-all-cities}
+# Fit model for each city; extract OR for male vs female
+city_models <- homicides |>
+  group_by(city_state) |>
+  nest() |>
+  mutate(
+    # Fit logistic models; some cities may fail if insufficient data -> safely
+    model = map(data, ~ safely(function(df) {
+      glm(solved ~ victim_age + victim_sex + victim_race, data = df, family = binomial())
+    })(.x)$result),
+    tidied = map(model, ~ if (!is.null(.x)) tidy(.x, conf.int = TRUE, conf.level = 0.95) else tibble()),
+    # Filter term of interest, and compute OR + CI
+    or_row = map(tidied, ~ .x |>
+                   filter(term == "victim_sexMale") |>
+                   transmute(
+                     term,
+                     estimate_logit = estimate,
+                     conf_low_logit = conf.low,
+                     conf_high_logit = conf.high,
+                     OR = exp(estimate),
+                     OR_low = exp(conf.low),
+                     OR_high = exp(conf.high)
+                   ))
+  ) |>
+  ungroup() |>
+  select(city_state, or_row) |>
+  unnest(or_row, keep_empty = TRUE)
+
+# Remove cities with no estimable OR (e.g., missing sex variation) for plotting; keep them noted separately
+city_or <- city_models |>
+  filter(!is.na(OR))
+
+missing_or_cities <- setdiff(city_models$city_state, city_or$city_state)
+
+list(
+  n_cities_total = nrow(city_models),
+  n_cities_with_or = nrow(city_or),
+  n_cities_missing_or = length(missing_or_cities),
+  missing_or_cities = missing_or_cities
+)
+```
+
+```{r problem1-plot, fig.height=8}
+# Plot ORs and CIs per city ordered by OR
+city_or_plot <- city_or |>
+  arrange(OR) |>
+  mutate(city_state = factor(city_state, levels = city_state)) |>
+  ggplot(aes(x = city_state, y = OR)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = OR_low, ymax = OR_high), width = 0.2) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(
+    title = "Adjusted Odds Ratio (Male vs Female) for Homicide Resolution by City",
+    subtitle = "Models adjusted for victim age and race; only White/Black victims included",
+    x = "City",
+    y = "Adjusted Odds Ratio (Male vs Female)"
+  ) +
+  theme_minimal()
+
+city_or_plot
+```
+
+### Comments on the plot
+
+- The dashed line at OR = 1 indicates no difference in resolution odds between male and female victims after adjusting for age and race.
+- Cities to the right of the line (OR > 1) suggest higher odds of resolution for male victims relative to female victims; those to the left (OR < 1) suggest lower odds.
+- The width of the error bars reflects uncertainty; wide intervals may indicate limited data or variability.
+- Note that some cities were excluded due to missing race reporting or data issues, and some cities lacked estimable sex effect due to limited variation in sex.
+
+# Problem 2: Bootstrap for Linear Regression Metrics
+
+We use the `weather_df` from `p8105.datasets`, and fit a simple linear regression:
+- Response: `tmax`
+- Predictors: `tmin` and `prcp`
+
+We obtain bootstrap distributions for:
+- R-squared, denoted r̂²
+- Product of slope coefficients β̂1 × β̂2 (for `tmin` and `prcp`)
+
+We'll use 5000 bootstrap samples.
+
+```{r problem2-load}
+library(p8105.datasets)
+data("weather_df")
+
+glimpse(weather_df)
+```
+
+```{r problem2-bootstrap}
+set.seed(123)
+
+# Helper: fit model and extract R^2 and product of coefficients
+fit_extract <- function(df) {
+  mdl <- lm(tmax ~ tmin + prcp, data = df)
+  r2 <- glance(mdl)$r.squared
+  coefs <- tidy(mdl)
+  # Identify terms for tmin and prcp, compute product
+  b1 <- coefs |> filter(term == "tmin") |> pull(estimate)
+  b2 <- coefs |> filter(term == "prcp") |> pull(estimate)
+  tibble(r2 = r2, beta_prod = b1 * b2)
+}
+
+# Bootstrap resampling indices by day or full observation? We'll resample rows
+n_boot <- 5000
+n <- nrow(weather_df)
+
+boot_results <- map_dfr(1:n_boot, ~ {
+  idx <- sample.int(n, size = n, replace = TRUE)
+  fit_extract(weather_df[idx, ])
+})
+
+boot_summary <- boot_results |>
+  summarize(
+    r2_mean = mean(r2),
+    r2_sd = sd(r2),
+    r2_q025 = quantile(r2, 0.025),
+    r2_q975 = quantile(r2, 0.975),
+    beta_prod_mean = mean(beta_prod),
+    beta_prod_sd = sd(beta_prod),
+    beta_prod_q025 = quantile(beta_prod, 0.025),
+    beta_prod_q975 = quantile(beta_prod, 0.975)
+  )
+
+boot_summary
+```
+
+```{r problem2-plots, fig.height=6}
+p_r2 <- boot_results |>
+  ggplot(aes(x = r2)) +
+  geom_histogram(bins = 40, fill = "steelblue", color = "white") +
+  geom_vline(xintercept = boot_summary$r2_q025, linetype = "dashed", color = "red") +
+  geom_vline(xintercept = boot_summary$r2_q975, linetype = "dashed", color = "red") +
+  labs(
+    title = "Bootstrap Distribution of R-squared",
+    x = expression(hat(R)^2),
+    y = "Count"
+  ) +
+  theme_minimal()
+
+p_beta_prod <- boot_results |>
+  ggplot(aes(x = beta_prod)) +
+  geom_histogram(bins = 40, fill = "darkorange", color = "white") +
+  geom_vline(xintercept = boot_summary$beta_prod_q025, linetype = "dashed", color = "red") +
+  geom_vline(xintercept = boot_summary$beta_prod_q975, linetype = "dashed", color = "red") +
+  labs(
+    title = "Bootstrap Distribution of β̂1 × β̂2",
+    x = expression(hat(beta)[1]~"×"~hat(beta)[2]),
+    y = "Count"
+  ) +
+  theme_minimal()
+
+p_r2 + p_beta_prod
+```
+
+### Description of distributions and 95% intervals
+
+- The histogram for r̂² shows the variability in model fit under resampling. The distribution is typically unimodal and fairly concentrated if predictors are strongly related to `tmax`.
+- The histogram for β̂1 × β̂2 reflects uncertainty in the combined effect magnitude and sign from `tmin` and `prcp`. This can be more spread out and may include negative values, depending on signs of coefficients.
+- The dashed red lines indicate the 2.5% and 97.5% quantiles, yielding bootstrap-based 95% confidence intervals:
+    - r̂² CI: [r2_q025, r2_q975] from `boot_summary`
+    - β̂1 × β̂2 CI: [beta_prod_q025, beta_prod_q975] from `boot_summary`
+
+# Problem 3: Birthweight Modeling
+
+We will analyze the birthweight dataset (roughly 4000 children) to model `bwt` (grams). We'll:
+- Load and clean data (appropriate names, factor conversions, missingness checks).
+- Propose a regression model based on both domain reasoning and data exploration.
+- Show residuals vs fitted values.
+- Compare to two alternative models using cross-validated prediction error:
+  1. Using `blength` (length) and `gaweeks` (gestational age) as predictors (main effects only).
+  2. Using `bhead`, `blength`, `babysex`, and all interactions including the three-way interaction.
+
+```{r problem3-load}
+birthweight_url <- "https://raw.githubusercontent.com/p8105/p8105_data/master/birthweight.csv"
+
+bw_raw <- read_csv(birthweight_url, show_col_types = FALSE) |> 
+  clean_names()
+
+glimpse(bw_raw)
+```
+
+```{r problem3-clean}
+# Convert appropriate variables to factors; check missingness
+bw <- bw_raw |>
+  mutate(
+    babysex = factor(babysex, levels = c(1,2), labels = c("Male","Female")),
+    frace = factor(frace, levels = c(1,2,3,4,8,9),
+                   labels = c("White","Black","Asian","PuertoRican","Other","Unknown")),
+    mrace = factor(mrace, levels = c(1,2,3,4,8),
+                   labels = c("White","Black","Asian","PuertoRican","Other")),
+    malform = factor(malform, levels = c(0,1), labels = c("Absent","Present"))
+  )
+
+bw_missing_summary <- bw |>
+  summarize(across(everything(), ~ sum(is.na(.)))) |>
+  pivot_longer(everything(), names_to = "variable", values_to = "n_missing") |>
+  arrange(desc(n_missing))
+
+bw_missing_summary |> head(15)
+```
+
+```{r problem3-model-proposal}
+# Exploratory correlations for numeric predictors
+numeric_vars <- bw |> select(where(is.numeric))
+cor_mat <- cor(numeric_vars, use = "pairwise.complete.obs")
+
+# Proposed model reasoning:
+# Birthweight strongly depends on gestational age, fetal size measures (head circumference, length),
+# maternal factors (pre-pregnancy BMI, weight gain), smoking, parity, and demographics.
+# We'll include key physiological predictors and known risk factors:
+#   bwt ~ bhead + blength + gaweeks + babysex + ppbmi + wtgain + smoken + mrace + parity + momage
+# We avoid overfitting with too many interactions initially.
+
+model_main <- lm(
+  bwt ~ bhead + blength + gaweeks + babysex + ppbmi + wtgain + smoken + mrace + parity + momage,
+  data = bw
+)
+
+summary(model_main)
+```
+
+```{r problem3-residuals-plot, fig.height=5}
+bw_aug <- bw |>
+  add_predictions(model_main, var = "pred") |>
+  add_residuals(model_main, var = "resid")
+
+resid_plot <- ggplot(bw_aug, aes(x = pred, y = resid)) +
+  geom_point(alpha = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Residuals vs Fitted Values",
+    x = "Fitted birthweight (grams)",
+    y = "Residuals (grams)"
+  ) +
+  theme_minimal()
+
+resid_plot
+```
+
+```{r problem3-compare-models}
+# Alternative models:
+# 1) blength + gaweeks (main effects)
+model_len_ga <- lm(bwt ~ blength + gaweeks, data = bw)
+
+# 2) full interactions among bhead, blength, babysex including three-way
+model_interact <- lm(bwt ~ bhead * blength * babysex, data = bw)
+
+# Cross-validated prediction error using Monte Carlo CV
+set.seed(123)
+n_mc <- 100
+cv_splits <- crossv_mc(bw, n = n_mc, prop = 0.8)
+
+# Helper function to compute RMSE on assessment set
+rmse <- function(truth, estimate) {
+  sqrt(mean((truth - estimate)^2))
+}
+
+compute_rmse <- function(split, mdl_spec) {
+  train <- as_tibble(training(split))
+  test <- as_tibble(testing(split))
+  mdl <- mdl_spec(train)
+  preds <- predict(mdl, newdata = test)
+  rmse(test$bwt, preds)
+}
+
+# Define model specs to be fit on training sets
+spec_main <- function(df) lm(bwt ~ bhead + blength + gaweeks + babysex + ppbmi + wtgain + smoken + mrace + parity + momage, data = df)
+spec_len_ga <- function(df) lm(bwt ~ blength + gaweeks, data = df)
+spec_interact <- function(df) lm(bwt ~ bhead * blength * babysex, data = df)
+
+cv_results <- tibble(
+  split = cv_splits$train
+) |>
+  mutate(
+    rmse_main = map_dbl(cv_splits$test, ~ compute_rmse(.x, spec_main)),
+    rmse_len_ga = map_dbl(cv_splits$test, ~ compute_rmse(.x, spec_len_ga)),
+    rmse_interact = map_dbl(cv_splits$test, ~ compute_rmse(.x, spec_interact))
+  )
+
+cv_summary <- cv_results |>
+  summarize(
+    rmse_main_mean = mean(rmse_main),
+    rmse_main_sd = sd(rmse_main),
+    rmse_len_ga_mean = mean(rmse_len_ga),
+    rmse_len_ga_sd = sd(rmse_len_ga),
+    rmse_interact_mean = mean(rmse_interact),
+    rmse_interact_sd = sd(rmse_interact)
+  )
+
+cv_summary
+```
+
+```{r problem3-compare-plot, fig.height=5}
+cv_long <- cv_results |>
+  pivot_longer(cols = starts_with("rmse_"), names_to = "model", values_to = "rmse") |>
+  mutate(model = recode(model,
+                        rmse_main = "Proposed model",
+                        rmse_len_ga = "Length + Gestational age",
+                        rmse_interact = "Head × Length × Sex (with 3-way)"))
+
+ggplot(cv_long, aes(x = model, y = rmse)) +
+  geom_boxplot() +
+  labs(
+    title = "Cross-Validated RMSE Across Models",
+    x = "Model",
+    y = "RMSE (grams)"
+  ) +
+  theme_minimal()
+```
+
+### Modeling process notes
+
+- I included key physiological predictors (head circumference, length, gestational age) and maternal risk factors (BMI, weight gain, smoking), plus parity and maternal age.
+- Residuals vs fitted plot suggests reasonable variance across the range of fitted values; any curvature or heteroscedasticity would motivate transformations or interaction terms, but the model appears broadly adequate.
+- Cross-validated RMSE comparison provides an objective performance metric. Typically, adding strong predictors (bhead, blength, gaweeks) and known risk factors improves predictive accuracy compared to minimal models. The fully interacted model can overfit depending on sample distribution; CV helps evaluate that.
